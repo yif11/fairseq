@@ -184,7 +184,7 @@ def do_setup(package_data):
             "numpy>=1.21.3",
             "regex",
             "sacrebleu>=1.4.12",
-            "torch>=1.13",
+            "torch>=1.11",
             "tqdm",
             "bitarray",
             "torchaudio>=0.8.0",
