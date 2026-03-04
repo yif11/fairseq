@@ -185,7 +185,7 @@ class MonotonicAttention(MultiheadAttention):
         )
         assert monotonic_step is not None
         finish_read = monotonic_step.eq(max_steps)
-        p_choose_i = torch.tensor(1)
+        p_choose_i = p_choose.new_ones(1)
 
         while finish_read.sum().item() < self.num_heads:
             # p_choose: self.num_heads, src_len
@@ -251,7 +251,7 @@ class MonotonicAttention(MultiheadAttention):
         # 4. Compute Beta
         if self.soft_attention:
             monotonic_step = monotonic_step.t()
-            beta_mask = torch.arange(src_len).expand_as(alpha).gt(monotonic_step).unsqueeze(1)
+            beta_mask = torch.arange(src_len, device=alpha.device).expand_as(alpha).gt(monotonic_step).unsqueeze(1)
             # If it's soft attention just do softmax on current context
             soft_energy = self.energy_from_qk(
                 query,
