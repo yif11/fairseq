@@ -28,6 +28,15 @@ from torch import Tensor
 
 DEFAULT_MAX_SOURCE_POSITIONS = 1024
 DEFAULT_MAX_TARGET_POSITIONS = 1024
+
+
+class _AttrDict(dict):
+    """A dict that also supports attribute access (d.key == d["key"])."""
+    __getattr__ = dict.__getitem__
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
+
+
 READ_ACTION = 0
 WRITE_ACTION = 1
 
@@ -104,6 +113,37 @@ class TransformerMonotonicDecoder(TransformerDecoder):
 
     def set_num_updates(self, num_updates):
         self.num_updates = num_updates
+
+    def forward(
+        self,
+        prev_output_tokens,
+        encoder_out=None,
+        incremental_state=None,
+        features_only=False,
+        **kwargs,
+    ):
+        """
+        Override forward to make the extra dict compatible with both
+        SequenceGenerator (expects extra["attn"]) and simuleval (extra.action).
+        """
+        x, extra = self.extract_features(
+            prev_output_tokens,
+            encoder_out=encoder_out,
+            incremental_state=incremental_state,
+        )
+        if not features_only:
+            x = self.output_layer(x)
+
+        # Return extra as an AttrDict so both extra["attn"] (SequenceGenerator)
+        # and extra.action (simuleval agent) work.
+        return x, _AttrDict(
+            attn=None,
+            action=extra.action,
+            p_choose=extra.p_choose,
+            attn_list=extra.attn_list,
+            encoder_out=extra.encoder_out,
+            encoder_padding_mask=extra.encoder_padding_mask,
+        )
 
     def pre_attention(
         self,
@@ -201,6 +241,19 @@ class TransformerMonotonicDecoder(TransformerDecoder):
         """
         # incremental_state = None
         assert encoder_out is not None
+
+        # Populate "steps" and "online" for SequenceGenerator compatibility.
+        # simuleval agents set these externally before each call;
+        # fairseq-generate / SequenceGenerator does not, so we fill them here.
+        # "steps" must be updated every call because tgt grows each step.
+        if incremental_state is not None:
+            incremental_state["steps"] = {
+                "src": encoder_out["encoder_out"][0].size(0),
+                "tgt": prev_output_tokens.size(1),
+            }
+            if "online" not in incremental_state:
+                incremental_state["online"] = {"only": torch.tensor(False)}
+
         (x, encoder_outs, encoder_padding_mask) = self.pre_attention(
             prev_output_tokens, encoder_out, incremental_state
         )
