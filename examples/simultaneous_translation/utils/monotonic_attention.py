@@ -42,14 +42,36 @@ def expected_alignment_from_p_choose(
     if padding_mask is not None:
         p_choose = p_choose.masked_fill(padding_mask.unsqueeze(1), 0.0)
 
-    if p_choose.is_cuda:
-        p_choose = p_choose.contiguous()
-        from alignment_train_cuda_binding import alignment_train_cuda as alignment_train
-    else:
-        from alignment_train_cpu_binding import alignment_train_cpu as alignment_train
+    try:
+        if p_choose.is_cuda:
+            p_choose = p_choose.contiguous()
+            from alignment_train_cuda_binding import alignment_train_cuda as alignment_train
+        else:
+            from alignment_train_cpu_binding import alignment_train_cpu as alignment_train
 
-    alpha = p_choose.new_zeros([bsz, tgt_len, src_len])
-    alignment_train(p_choose, alpha, eps)
+        alpha = p_choose.new_zeros([bsz, tgt_len, src_len])
+        alignment_train(p_choose, alpha, eps)
+    except (ImportError, ModuleNotFoundError):
+        # Pure PyTorch fallback when C++/CUDA extensions are not available.
+        # Reference: test_alignment_train.py _test_custom_alignment_train_ref
+        cumprod_1mp = exclusive_cumprod(1 - p_choose, dim=2, eps=eps)
+        cumprod_1mp_clamp = torch.clamp(cumprod_1mp, eps, 1.0)
+
+        alpha_0 = p_choose.new_zeros([bsz, 1, src_len])
+        alpha_0[:, :, 0] = 1.0
+
+        previous_alpha = [alpha_0]
+        for i in range(tgt_len):
+            alpha_i = (
+                p_choose[:, i]
+                * cumprod_1mp[:, i]
+                * torch.cumsum(
+                    previous_alpha[i][:, 0] / cumprod_1mp_clamp[:, i], dim=1
+                )
+            ).clamp(0, 1.0)
+            previous_alpha.append(alpha_i.unsqueeze(1))
+
+        alpha = torch.cat(previous_alpha[1:], dim=1)
 
     # Mix precision to prevent overflow for fp16
     alpha = alpha.type(dtype)
